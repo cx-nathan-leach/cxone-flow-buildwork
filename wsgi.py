@@ -10,6 +10,7 @@ from orchestration import OrchestrationDispatch
 from orchestration.bbdc import  BitBucketDataCenterOrchestrator
 from orchestration.adoe import AzureDevOpsEnterpriseOrchestrator
 from orchestration.gh import GithubOrchestrator
+from orchestration.gl import GitlabOrchestrator
 import json, logging, os
 from config import ConfigurationException, get_config_path
 from config.server import CxOneFlowConfig
@@ -17,7 +18,6 @@ from time import perf_counter_ns
 from task_management import TaskManager
 import cxoneflow_logging as cof_logging
 from api_utils.auth_factories import EventContext, HeaderFilteredEventContext
-
 
 cof_logging.bootstrap()
 
@@ -42,7 +42,6 @@ async def ping():
         content = json.dumps(request.json) if request.content_type == "application/json" else request.data
         __log.debug(f"ping webhook: headers: [{request.headers}] body: [{content}]")
     return Response("pong", status=200)
-
 
 @app.post("/bbdc")
 async def bbdc_webhook_endpoint():
@@ -96,7 +95,27 @@ async def adoe_webhook_endpoint():
     except Exception as ex:
         __log.exception(ex)
         return Response(status=400)
-    
+
+@app.post("/gl")
+async def gitlab_webhook_endpoint():
+    __log.info("Received hook for GitLab")
+    __log.debug(f"gitlab webhook: headers: [{request.headers}] body: [{json.dumps(request.json)}]")
+    try:
+        orch = GitlabOrchestrator(HeaderFilteredEventContext(request.get_data(), dict(request.headers), "User-Agent|X-Gitlab|Idempotency-Key"))
+
+        if not orch.is_diagnostic:
+            TaskManager.in_background(OrchestrationDispatch.execute(orch))
+            return Response(status=201)
+        else:
+            for service in CxOneFlowConfig.retrieve_scm_services(orch.config_key):
+                if await orch.is_signature_valid(service.shared_secret):
+                    return Response(status=200)
+            return Response(status=401)
+    except Exception as ex:
+        __log.exception(ex)
+        return Response(status=400)
+
+
 @app.get("/artifacts/<path:path>" )
 async def artifacts(path):
     __log.debug(f"Fetching artifact at {path}")

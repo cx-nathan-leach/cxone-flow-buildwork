@@ -28,7 +28,7 @@ class OrchestratorBase:
 
     @staticmethod
     def normalize_branch_name(branch):
-        return branch.split("/")[-1:].pop()
+        return branch.replace("/refs/heads/", "")
 
     @classmethod
     def log(clazz) -> logging.Logger:
