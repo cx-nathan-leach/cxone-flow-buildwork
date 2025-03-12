@@ -42,8 +42,16 @@ class APISession:
     def api_endpoint(self):
         return self.__api_endpoint
 
-    async def exec(self, event_context : EventContext, method : str, path : str, query : Dict = None, body : Any = None, extra_headers : Dict = None) -> Response:
-        url = form_url(self.api_endpoint, path)
+    def __concat_path_to_endpoint(self, path :str):
+        return self.api_endpoint.rstrip("/") + "/" + path.lstrip("/")
+
+    async def exec(self, event_context : EventContext, method : str, path : str, query : Dict = None, 
+                   body : Any = None, extra_headers : Dict = None, url_vars : Dict = None) -> Response:
+        url = self.__concat_path_to_endpoint(path)
+        if url_vars is not None:
+            for var in url_vars.keys():
+                url = url.replace(f":{var}", url_vars[var])
+
         headers = dict(self.__headers)
         if not extra_headers is None:
             headers.update(extra_headers)

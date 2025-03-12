@@ -28,7 +28,7 @@ class GitlabOrchestrator(OrchestratorBase):
 
     __pr_draft_query = parse("$.object_attributes.draft")
     __pr_link_query = parse("$.object_attributes.url")
-    __pr_id_query = parse("$.object_attributes.id")
+    __pr_id_query = parse("$.object_attributes.iid")
     __pr_state_query = parse("$.object_attributes.state")
     __pr_status_query = parse("$.object_attributes.action")
     __pr_source_branch_query = parse("$.object_attributes.source_branch")

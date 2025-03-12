@@ -59,7 +59,9 @@ class PullRequestDecoration:
 
     @staticmethod
     def scan_link(display_url : str, project_id : str, scanid : str, branch : str):
-        return f"[{scanid}]({display_url}{Path("projects") / Path(project_id) / Path(f"scans?id={scanid}&filter_by_Scan_Id={scanid}&branch={branch}")})"
+        return f"[{scanid}]({display_url}{Path("projects") / 
+                                          Path(project_id) / 
+                                          Path(f"scans?id={scanid}&filter_by_Scan_Id={scanid}&branch={urllib.parse.quote_plus(branch)}")})"
 
     @staticmethod
     def sca_result_link(display_url : str, project_id : str, scanid : str, title : str, cve : str, package_id : str):
