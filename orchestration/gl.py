@@ -30,7 +30,7 @@ class GitlabOrchestrator(OrchestratorBase):
     __pr_link_query = parse("$.object_attributes.url")
     __pr_id_query = parse("$.object_attributes.id")
     __pr_state_query = parse("$.object_attributes.state")
-    __pr_status_query = parse("$.object_attributes.merge_status")
+    __pr_status_query = parse("$.object_attributes.action")
     __pr_source_branch_query = parse("$.object_attributes.source_branch")
     __pr_target_branch_query = parse("$.object_attributes.target_branch")
     __pr_source_hash_query = parse("$.object_attributes.last_commit.id")
@@ -123,8 +123,8 @@ class GitlabOrchestrator(OrchestratorBase):
     async def _execute_push_scan_workflow(self, services : CxOneFlowServices, additional_content : List[AdditionalScanContentWriter]=None, 
                                           scan_tags : Dict[str, str]=None):
 
-        self.__source_branch = self.__target_branch = OrchestratorBase.normalize_branch_name(GitlabOrchestrator.__push_ref_query.find(self.event_context.message) \
-            .pop().value)
+        self.__source_branch = self.__target_branch = OrchestratorBase.normalize_branch_name(
+            GitlabOrchestrator.__push_ref_query.find(self.event_context.message).pop().value)
         self.__source_hash = GitlabOrchestrator.__push_source_hash_query.find(self.event_context.message).pop().value
         self.__target_hash = GitlabOrchestrator.__push_target_hash_query.find(self.event_context.message).pop().value
 
@@ -132,7 +132,7 @@ class GitlabOrchestrator(OrchestratorBase):
 
         self.__protected_branches = []
         if GitlabOrchestrator.__push_ref_protected_query.find(self.event_context.message).pop().value:
-            self.__protected_branches.append(self.__target_branch)
+            self.__protected_branches.append(OrchestratorBase.normalize_branch_name(self.__target_branch))
 
         return await OrchestratorBase._execute_push_scan_workflow(self, services, additional_content, scan_tags)
 
@@ -157,8 +157,8 @@ class GitlabOrchestrator(OrchestratorBase):
 
 
     def __populate_common_pr_data(self):
-        self.__source_branch = GitlabOrchestrator.__pr_source_branch_query.find(self.event_context.message).pop().value
-        self.__target_branch = GitlabOrchestrator.__pr_target_branch_query.find(self.event_context.message).pop().value
+        self.__source_branch = OrchestratorBase.normalize_branch_name(GitlabOrchestrator.__pr_source_branch_query.find(self.event_context.message).pop().value)
+        self.__target_branch = OrchestratorBase.normalize_branch_name(GitlabOrchestrator.__pr_target_branch_query.find(self.event_context.message).pop().value)
         self.__source_hash = GitlabOrchestrator.__pr_source_hash_query.find(self.event_context.message).pop().value
         self.__target_hash = None
         self.__pr_id = str(GitlabOrchestrator.__pr_id_query.find(self.event_context.message).pop().value)
@@ -176,37 +176,40 @@ class GitlabOrchestrator(OrchestratorBase):
 
         project_id = GitlabOrchestrator.__event_project_id_query.find(self.event_context.message).pop().value
 
-        self.__protected_branches = []
+        existing_scans = await services.cxone.find_pr_scans(await self.get_cxone_project_name(), self.__pr_id, self.__source_hash)
 
-        default_branch_resp, protected_branch_resp = await asyncio.gather(
-            services.scm.exec("GET", f"api/v4/projects/{project_id}"),
-            services.scm.exec("GET", f"api/v4/projects/{project_id}/protected_branches"))
-        
-        found_default = GitlabOrchestrator.__api_default_branch_query.find(json_on_ok(default_branch_resp))
+        if len(existing_scans) > 0:
+            # This is a scan tag update, not a scan.
+            return await OrchestratorBase._execute_pr_tag_update_workflow(self, services)
+        else:
+            self.__protected_branches = []
 
-        if len(found_default) > 0:
-            self.__protected_branches.append(found_default.pop().value)
-        
-        for pbranch in GitlabOrchestrator.__api_protected_branch_query.find(json_on_ok(protected_branch_resp)):
-            branch_value = pbranch.value
+            default_branch_resp, protected_branch_resp = await asyncio.gather(
+                services.scm.exec("GET", f"/projects/{project_id}"),
+                services.scm.exec("GET", f"/projects/{project_id}/protected_branches"))
+            
+            found_default = GitlabOrchestrator.__api_default_branch_query.find(json_on_ok(default_branch_resp))
 
-            # This can be a wildcard, so add it to the list of protected branches
-            # then add the target/source branches if they match
-            self.__protected_branches.append(branch_value)
+            if len(found_default) > 0:
+                self.__protected_branches.append(OrchestratorBase.normalize_branch_name(found_default.pop().value))
+            
+            for pbranch in GitlabOrchestrator.__api_protected_branch_query.find(json_on_ok(protected_branch_resp)):
+                branch_value = OrchestratorBase.normalize_branch_name(pbranch.value)
 
-            if fnmatch.fnmatch(self.__target_branch, branch_value):
-                self.__protected_branches.append(self.__target_branch)
+                # This can be a wildcard, so add it to the list of protected branches
+                # then add the target/source branches if they match
+                self.__protected_branches.append(branch_value)
 
-            if fnmatch.fnmatch(self.__source_branch, branch_value):
-                self.__protected_branches.append(self.__source_branch)
-        
-        # dedupe
-        self.__protected_branches = list(set(self.__protected_branches))
+                if fnmatch.fnmatch(self.__target_branch, branch_value):
+                    self.__protected_branches.append(OrchestratorBase.normalize_branch_name(self.__target_branch))
 
-        return await OrchestratorBase._execute_pr_scan_workflow(self, services, additional_content, scan_tags)
+                if fnmatch.fnmatch(self.__source_branch, branch_value):
+                    self.__protected_branches.append(OrchestratorBase.normalize_branch_name(self.__source_branch))
+            
+            # dedupe
+            self.__protected_branches = list(set(self.__protected_branches))
 
-    async def _execute_pr_tag_update_workflow(self, services : CxOneFlowServices, *args):
-        pass
+            return await OrchestratorBase._execute_pr_scan_workflow(self, services, additional_content, scan_tags)
 
     __workflow_map = {
         "push" : _execute_push_scan_workflow,

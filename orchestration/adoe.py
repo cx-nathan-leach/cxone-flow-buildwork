@@ -158,7 +158,8 @@ class AzureDevOpsEnterpriseOrchestrator(OrchestratorBase):
         self.__target_hash = [x.value for x in list(self.__pr_tohash_query.find(self.event_context.message))][0]
         self.__pr_id = str([x.value for x in list(self.__pr_id_query.find(self.event_context.message))][0])
 
-        statuses = list(set([AzureDevOpsEnterpriseOrchestrator.__pr_status_map[x.value] for x in AzureDevOpsEnterpriseOrchestrator.__pr_reviewer_status_query.find(self.event_context.message)]))
+        statuses = list(set([AzureDevOpsEnterpriseOrchestrator.__pr_status_map[x.value] 
+                             for x in AzureDevOpsEnterpriseOrchestrator.__pr_reviewer_status_query.find(self.event_context.message)]))
 
         if not len(statuses) > 0:
             self.__pr_status = "NO_REVIEWERS"
