@@ -31,6 +31,10 @@ def get_config_path():
 class ConfigurationException(Exception):
 
     @staticmethod
+    def no_wildcard_routes(key_path):
+        return ConfigurationException(f"A wildcard route that matches an arbitrary value is not valid for {key_path}")
+
+    @staticmethod
     def missing_key_path(key_path):
         return ConfigurationException(f"Missing key at path: {key_path}")
 

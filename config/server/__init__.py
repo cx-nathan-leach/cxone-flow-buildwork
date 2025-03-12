@@ -2,7 +2,7 @@ from _version import __version__
 from _agent import __agent__
 from pathlib import Path
 from .. import ConfigurationException, RouteNotFoundException, CommonConfig
-import re, yaml
+import re, uuid
 from scm_services import SCMService, ADOEService, BBDCService, GHService, GLService
 from scm_services.cloner import Cloner
 from api_utils import auth_basic, auth_bearer
@@ -353,6 +353,9 @@ class CxOneFlowConfig(CommonConfig):
             ),
             re.IGNORECASE,
         )
+
+        if repo_matcher.findall(str(uuid.uuid4())):
+            raise ConfigurationException.no_wildcard_routes(f"{config_path}/repo-match")
 
         service_moniker = CxOneFlowConfig._get_value_for_key_or_fail(
             config_path, "service-name", config_dict
