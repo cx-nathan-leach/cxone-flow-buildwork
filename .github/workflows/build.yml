@@ -5,6 +5,10 @@ on:
           description: 'The version tag to use for stamping build artifacts and naming generated archives'
           required: true
           type: string
+        whl_tag:
+          description: 'The version tag to use for stamping Python whl build artifacts'
+          required: true
+          type: string
         prerelease:
           description: 'Set to true if published build is a prerelease'
           type: boolean
@@ -20,6 +24,7 @@ env:
 jobs:
   publish-container:
     runs-on: ubuntu-latest
+    needs: [compile-manual,resolver-agent-deb-amd64,build-kickoff-whl]
     steps:
       - name: Set up Docker Buildx
         id: buildx
@@ -48,6 +53,29 @@ jobs:
           [ ${{ inputs.prerelease }} = false ] && docker tag $DOCKER_REPO:$BRIEFTAG $DOCKER_REPO:latest || :
           docker push --all-tags $DOCKER_REPO
   
+  build-kickoff-whl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Code
+        uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
+        with:
+          python-version: "3.12"
+
+      - name: Build package
+        run: |
+          echo "__version__='${{ inputs.whl_tag }}'" > cxoneflow_kickoff_api/__version__.py
+          pip3 install build
+          python3 -m build
+
+      - name: Upload whl
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
+        with:
+          name: whl-${{ github.run_number }}
+          path: dist/*.whl
 
   compile-manual:
     runs-on: ubuntu-latest
@@ -69,7 +97,7 @@ jobs:
       - name: Upload manual
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
-          name: manual-${GITHUB_RUN_NUMBER}
+          name: manual-${{ github.run_number }}
           path: manual/cxone-flow.pdf
   
       - name: Build PDF Release Notes
@@ -81,7 +109,7 @@ jobs:
       - name: Upload release notes
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
-          name: release-notes-${GITHUB_RUN_NUMBER}
+          name: release-notes-${{ github.run_number }}
           path: release_notes/release_notes.pdf
 
   resolver-agent-deb-amd64:
@@ -102,13 +130,18 @@ jobs:
       - name: Upload deb amd64 package
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b
         with:
-          name: deb-amd64-${GITHUB_RUN_NUMBER}
+          name: deb-amd64-${{ github.run_number }}
           path: agent_packages/resolver/debian/*.deb
 
   publish-release:
     runs-on: ubuntu-latest
-    needs: [publish-container,compile-manual,resolver-agent-deb-amd64]
+    needs: [publish-container,compile-manual,resolver-agent-deb-amd64,build-kickoff-whl]
     steps:
+      - name: Download whl
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: whl-${{ github.run_number }}
+
       - name: Make release text
         run: |
           echo "# CxOneFlow ${{ inputs.tag }}" > release.md
@@ -120,15 +153,35 @@ jobs:
           echo The CxOneFlow Resolver Agent is an optional component for running SCA Resolver prior to a scan.  It >> release.md
           echo can be downloaded as an installer package appropriate for supported operating systems. >> release.md
 
+          echo "" >> release.md
+          echo "" >> release.md
+          echo "# CxOneFlow Kickoff API Client" >> release.md
+          echo 'Installation can be performed by adding one of the following lines to your `requirements.txt` file:' >> release.md
+
+          WHEEL_NAME=$(basename $(ls *.whl))
+          WHEEL_HASH=$(pip3 hash $WHEEL_NAME | grep "^--")
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/$WHEEL_NAME"
+
+          echo '```' >> release.md
+          echo $RELEASE_URL >> release.md
+          echo '```' >> release.md
+
+          echo "## Hashes" >> release.md
+          echo "### $WHEEL_NAME" >> release.md
+          echo '```' >> release.md
+          echo "$WHEEL_HASH" >> release.md
+          echo '```' >> release.md
+
+
       - name: Download manual
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: manual-${GITHUB_RUN_NUMBER}
+          name: manual-${{ github.run_number }}
 
       - name: Download release notes
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: release-notes-${GITHUB_RUN_NUMBER}
+          name: release-notes-${{ github.run_number }}
 
       - name: Rename documentation artifacts
         run: |
@@ -138,7 +191,7 @@ jobs:
       - name: Download deb-amd64
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
-          name: deb-amd64-${GITHUB_RUN_NUMBER}
+          name: deb-amd64-${{ github.run_number }}
 
       - name: Create GitHub Release
         id: create_release
@@ -146,7 +199,7 @@ jobs:
         with:
           allowUpdates: true
           artifactErrorsFailBuild: true
-          artifacts: ./*.pdf, ./*.deb
+          artifacts: ./*.pdf, ./*.deb, ./*.whl
           bodyFile: release.md
           name: ${{ inputs.tag }}
           prerelease: ${{ inputs.prerelease }}
@@ -159,8 +212,10 @@ jobs:
     steps:
       - uses: geekyeggo/delete-artifact@9d15d164b1dcd538ff1b1a2984bc2c0240986c3b
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           name: |
-            release-notes-${GITHUB_RUN_NUMBER}
-            manual-${GITHUB_RUN_NUMBER}
-            deb-amd64-${GITHUB_RUN_NUMBER}
+            release-notes-${{ github.run_number }}
+            manual-${{ github.run_number }}
+            deb-amd64-${{ github.run_number }}
+            whl-${{ github.run_number }}
         

@@ -21,6 +21,7 @@ from workflows import ResultSeverity, ResultStates
 from services import CxOneFlowServices
 from typing import List, Dict, Union
 from cxone_api import CxOneClient
+from kickoff_services import DummyKickoffService, KickoffService
 
 
 class CxOneFlowConfig(CommonConfig):
@@ -46,7 +47,11 @@ class CxOneFlowConfig(CommonConfig):
     @staticmethod
     def retrieve_services_by_route(
         clone_urls: str, scm_config_key: str
-    ) -> CxOneFlowServices:
+    ) -> Union[CxOneFlowServices, None]:
+        
+        if scm_config_key not in CxOneFlowConfig.__ordered_scm_services_config.keys():
+            return None
+        
         if type(clone_urls) is list:
             it_list = clone_urls
         else:
@@ -342,6 +347,20 @@ class CxOneFlowConfig(CommonConfig):
             )
 
         return retval
+    
+    @staticmethod
+    def __kickoff_service_factory(cxone_client, config_dict, config_path, moniker):
+        if config_dict is None:
+            return DummyKickoffService()
+        
+        # Default 3 max concurrent scans with a max of 10
+        max_scans = min(10, int(CxOneFlowConfig._get_value_for_key_or_default("max-concurrent-scans", config_dict, 3)))
+        # Just in case someone gets funny and uses a 0 or negative number.
+        max_scans = max(max_scans, 1)
+
+        return KickoffService(cxone_client,
+            CxOneFlowConfig._get_secret_from_value_of_key_or_fail(config_path, "ssh-public-key", config_dict),
+            moniker, max_scans)
 
     @staticmethod
     def __setup_scm(
@@ -503,6 +522,8 @@ class CxOneFlowConfig(CommonConfig):
             scm_service,
             pr_feedback_service,
             resolver_service,
+            CxOneFlowConfig.__kickoff_service_factory(cxone_client,
+                CxOneFlowConfig._get_value_for_key_or_default("kickoff", config_dict, None), f"{config_path}/kickoff", service_moniker)
         )
 
     @staticmethod

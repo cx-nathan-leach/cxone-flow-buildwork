@@ -7,17 +7,29 @@ that is compatible with other methods of deployment.
 from _agent import __agent__
 from flask import Flask, request, Response, send_from_directory
 from orchestration import OrchestrationDispatch
+
+from orchestration.kickoff import KickoffOrchestrator
+from orchestration.kickoff.bbdc import BitBucketDataCenterKickoffOrchestrator
+from orchestration.kickoff.gh import GithubKickoffOrchestrator
+from orchestration.kickoff.adoe import AzureDevOpsKickoffOrchestrator
+from orchestration.kickoff.gl import GitlabKickoffOrchestrator
+
 from orchestration.bbdc import  BitBucketDataCenterOrchestrator
 from orchestration.adoe import AzureDevOpsEnterpriseOrchestrator
 from orchestration.gh import GithubOrchestrator
 from orchestration.gl import GitlabOrchestrator
-import json, logging, os
-from config import ConfigurationException, get_config_path
+
+import json, logging, os, asyncio
+from config import ConfigurationException, RouteNotFoundException, get_config_path
 from config.server import CxOneFlowConfig
-from time import perf_counter_ns
 from task_management import TaskManager
 import cxoneflow_logging as cof_logging
 from api_utils.auth_factories import EventContext, HeaderFilteredEventContext
+import cxoneflow_kickoff_api as ko
+import cxoneflow_kickoff_api.status as kostat
+
+TaskManager.bootstrap()
+asyncio.set_event_loop(TaskManager.loop())
 
 cof_logging.bootstrap()
 
@@ -31,7 +43,32 @@ except ConfigurationException as ce:
     __log.exception(ce)
     raise
 
-TaskManager.bootstrap()
+async def __kickoff_impl(orch : KickoffOrchestrator):
+    msg = None
+    code = kostat.KickoffStatusCodes.SERVER_ERROR
+
+    try:
+        if await OrchestrationDispatch.execute_kickoff(orch):
+            code = kostat.KickoffStatusCodes.SCAN_STARTED
+            msg = ko.KickoffResponseMsg(running_scans=orch.running_scans, started_scan=orch.started_scan)
+        else:
+            code = kostat.KickoffStatusCodes.BAD_REQUEST
+            msg = None
+    except KickoffOrchestrator.KickoffScanExistsException:
+        code = kostat.KickoffStatusCodes.SCAN_EXISTS
+        msg = ko.KickoffResponseMsg(running_scans=orch.running_scans)
+    except KickoffOrchestrator.TooManyRunningScansExeception:
+        code = kostat.KickoffStatusCodes.TOO_MANY_SCANS
+        msg = ko.KickoffResponseMsg(running_scans=orch.running_scans)
+    except RouteNotFoundException:
+        code = kostat.KickoffStatusCodes.NO_ROUTE
+        msg = None
+    except OrchestrationDispatch.NotAuthorizedException:
+        code = kostat.KickoffStatusCodes.NOT_AUTHORIZED
+        msg = None
+
+    # pylint: disable=E1101
+    return Response(msg.to_json() if msg is not None else None, status=code.value, content_type="application/json")
 
 
 app = Flask(__app_name__)
@@ -41,6 +78,7 @@ async def ping():
     if request.method != "GET" and "ENABLE_DUMP" in os.environ.keys():
         content = json.dumps(request.json) if request.content_type == "application/json" else request.data
         __log.debug(f"ping webhook: headers: [{request.headers}] body: [{content}]")
+
     return Response("pong", status=200)
 
 @app.post("/bbdc")
@@ -53,6 +91,12 @@ async def bbdc_webhook_endpoint():
     except Exception as ex:
         __log.exception(ex)
         return Response(status=400)
+    
+
+@app.post("/bbdc/kickoff")
+async def bbdc_kickoff_endpoint():
+    ec = EventContext(request.get_data(), dict(request.headers))
+    return await TaskManager.in_foreground(__kickoff_impl(BitBucketDataCenterKickoffOrchestrator(ko.BitbucketKickoffMsg(**(ec.message)), ec)))
 
 @app.post("/gh")
 async def github_webhook_endpoint():
@@ -74,7 +118,13 @@ async def github_webhook_endpoint():
     except Exception as ex:
         __log.exception(ex)
         return Response(status=400)
-  
+
+@app.post("/gh/kickoff")
+async def github_kickoff_endpoint():
+    ec = EventContext(request.get_data(), dict(request.headers))
+    return await TaskManager.in_foreground(__kickoff_impl(GithubKickoffOrchestrator(ko.GithubKickoffMsg(**(ec.message)), ec)))
+
+
 @app.post("/adoe")
 async def adoe_webhook_endpoint():
     __log.info("Received hook for Azure DevOps Enterprise")
@@ -96,6 +146,12 @@ async def adoe_webhook_endpoint():
         __log.exception(ex)
         return Response(status=400)
 
+
+@app.post("/adoe/kickoff")
+async def adoe_kickoff_endpoint():
+    ec = EventContext(request.get_data(), dict(request.headers))
+    return await TaskManager.in_foreground(__kickoff_impl(AzureDevOpsKickoffOrchestrator(ko.AdoKickoffMsg(**(ec.message)), ec)))
+
 @app.post("/gl")
 async def gitlab_webhook_endpoint():
     __log.info("Received hook for GitLab")
@@ -114,6 +170,11 @@ async def gitlab_webhook_endpoint():
     except Exception as ex:
         __log.exception(ex)
         return Response(status=400)
+
+@app.post("/gl/kickoff")
+async def gitlab_kickoff_endpoint():
+    ec = EventContext(request.get_data(), dict(request.headers))
+    return await TaskManager.in_foreground(__kickoff_impl(GitlabKickoffOrchestrator(ko.GitlabKickoffMsg(**(ec.message)), ec)))
 
 
 @app.get("/artifacts/<path:path>" )
