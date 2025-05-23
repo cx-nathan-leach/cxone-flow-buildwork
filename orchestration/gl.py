@@ -1,5 +1,5 @@
-from .base import OrchestratorBase
-from .naming.gl import GitlabProjectNaming
+from orchestration.base import OrchestratorBase
+from orchestration.naming.gl import GitlabProjectNaming
 from api_utils.auth_factories import EventContext
 from jsonpath_ng import parse
 from services import CxOneFlowServices
@@ -36,6 +36,7 @@ class GitlabOrchestrator(OrchestratorBase):
     __push_before_hash_query = parse("$.before")
     __push_ref_query = parse("$.ref")
     __push_ref_protected_query = parse("$.ref_protected")
+    __push_default_branch_query = parse("$.project.default_branch")
 
     __pr_draft_query = parse("$.object_attributes.draft")
     __pr_link_query = parse("$.object_attributes.url")
@@ -166,6 +167,10 @@ class GitlabOrchestrator(OrchestratorBase):
         if GitlabOrchestrator.__push_ref_protected_query.find(self.event_context.message).pop().value:
             self.__protected_branches.append(OrchestratorBase.normalize_branch_name(self.__target_branch))
 
+        found_default = GitlabOrchestrator.__push_default_branch_query.find(self.event_context.message)
+        if len(found_default) > 0:
+            self.__protected_branches.append(OrchestratorBase.normalize_branch_name(found_default.pop().value))
+
         return await OrchestratorBase._execute_push_scan_workflow(self, services, additional_content, scan_tags)
 
     async def execute(self, services : CxOneFlowServices):
@@ -181,7 +186,7 @@ class GitlabOrchestrator(OrchestratorBase):
     async def _get_protected_branches(self, scm_service : SCMService) -> list:
         return self.__protected_branches
         
-    async def get_cxone_project_name(self) -> str:
+    async def get_default_cxone_project_name(self) -> str:
         return GitlabProjectNaming.create_project_name(self._repo_project_key)
 
     async def __is_pr_draft(self) -> bool:
@@ -208,7 +213,8 @@ class GitlabOrchestrator(OrchestratorBase):
 
         project_id = GitlabOrchestrator.__event_project_id_query.find(self.event_context.message).pop().value
 
-        existing_scans = await services.cxone.find_pr_scans(await self.get_cxone_project_name(), self.__pr_id, self.__source_hash)
+        existing_scans = await services.cxone.find_pr_scans(await services.naming.get_project_name(
+            await self.get_default_cxone_project_name(), self.event_context), self.__pr_id, self.__source_hash)
 
         if len(existing_scans) > 0:
             # This is a scan tag update, not a scan.

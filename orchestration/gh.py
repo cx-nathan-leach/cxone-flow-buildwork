@@ -1,4 +1,4 @@
-from .base import OrchestratorBase
+from orchestration.base import OrchestratorBase
 from api_utils import signature
 from api_utils.pagers import async_api_page_generator
 from api_utils.auth_factories import EventContext
@@ -10,7 +10,7 @@ from cxone_api.high.scans import ScanInspector
 from services import CxOneFlowServices
 from typing import List, Dict
 from workflows.utils import AdditionalScanContentWriter
-from .naming.gh import GithubProjectNaming
+from orchestration.naming.gh import GithubProjectNaming
 
 class GithubOrchestrator(OrchestratorBase):
 
@@ -327,7 +327,7 @@ class GithubOrchestrator(OrchestratorBase):
     def _repo_clone_url(self, cloner) -> str:
         return self.__clone_urls[cloner.select_protocol_from_supported(self.__clone_urls.keys())]
 
-    async def get_cxone_project_name(self) -> str:
+    async def get_default_cxone_project_name(self) -> str:
         return GithubProjectNaming.create_project_name(self._repo_organization, self._repo_slug)
 
     __workflow_map = {

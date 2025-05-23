@@ -1,5 +1,5 @@
-from .base import OrchestratorBase
-from .naming.bbdc import BitbucketProjectNaming
+from orchestration.base import OrchestratorBase
+from orchestration.naming.bbdc import BitbucketProjectNaming
 from api_utils.auth_factories import EventContext
 from api_utils import signature
 from jsonpath_ng import parse
@@ -181,7 +181,7 @@ class BitBucketDataCenterOrchestrator(OrchestratorBase):
         
         return list(set(retBranches))
 
-    async def get_cxone_project_name(self) -> str:
+    async def get_default_cxone_project_name(self) -> str:
         return BitbucketProjectNaming.create_project_name(self._repo_project_key, self.__repo_project_name, self._repo_name)
 
     @property

@@ -1,4 +1,4 @@
-import zipfile, tempfile, logging
+import zipfile, tempfile, logging, asyncio
 from pathlib import Path, PurePath
 from time import perf_counter_ns
 from _version import __version__
@@ -74,8 +74,10 @@ class OrchestratorBase:
         for entry in p.iterdir():
             if entry.is_dir():
                 return_dict |= OrchestratorBase.__get_path_dict(entry, use_root)
-            else:
+            elif entry.is_file():
                 return_dict[entry] = PurePath(entry).relative_to(use_root)
+            else:
+                OrchestratorBase.log().warning(f"File skipped: {str(entry)} (Symlink: {entry.is_symlink()})")
         return return_dict
     
     def get_header_key_safe(self, key):
@@ -93,6 +95,12 @@ class OrchestratorBase:
     
     async def _get_clone_worker(self, scm_service : SCMService, clone_url : str, failures : int) -> CloneWorker:
         return await scm_service.cloner.clone(clone_url)
+    
+
+    @staticmethod
+    def __zip_write_delegate(zip_entries : Dict, zipfile : zipfile.ZipFile):
+        for entry_key in zip_entries.keys():
+            zipfile.write(entry_key, zip_entries[entry_key])
     
     async def __exec_immediate_scan(self, cxone_service : CxOneService, scm_service : SCMService, 
         clone_url : str, source_hash : str, source_branch : str, 
@@ -125,10 +133,9 @@ class OrchestratorBase:
                         with zipfile.ZipFile(zip_file, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as upload_payload:
                             zip_entries = OrchestratorBase.__get_path_dict(code_path)
 
-                            OrchestratorBase.log().debug(f"[{clone_url}][{source_branch}][{source_hash}] zipped {len(zip_entries)} files for scan.")
+                            OrchestratorBase.log().debug(f"[{clone_url}][{source_branch}][{source_hash}] zipping {len(zip_entries)} files for scan.")
 
-                            for entry_key in zip_entries.keys():
-                                upload_payload.write(entry_key, zip_entries[entry_key])
+                            await asyncio.to_thread(OrchestratorBase.__zip_write_delegate, zip_entries, upload_payload)
                             
                             OrchestratorBase.log().info(f"{clone_url} zipped in {perf_counter_ns() - check}ns")
 
@@ -166,7 +173,9 @@ class OrchestratorBase:
             raise OrchestrationException("Clone URL could not be determined.")
 
         if target_branch in protected_branches:
-            project_config = await services.cxone.load_project_config(await self.get_cxone_project_name())
+            project_config = await services.cxone.load_project_config(await self.get_default_cxone_project_name(),
+                await services.naming.get_project_name(await self.get_default_cxone_project_name(), self.event_context), 
+                clone_url)
 
             if not self.deferred_scan and not services.resolver.skip and await services.cxone.sca_selected(project_config, source_branch):
                 try:
@@ -249,8 +258,9 @@ class OrchestratorBase:
         _, source_hash = await self._get_source_branch_and_hash()
         target_branch, _ = await self._get_target_branch_and_hash()
 
-        updated_scans = await services.cxone.update_scan_pr_tags(await self.get_cxone_project_name(), self._pr_id, source_hash,
-                                                                target_branch, self._pr_state, self._pr_status)
+        updated_scans = await services.cxone.update_scan_pr_tags(await services.naming.get_project_name(
+            await self.get_default_cxone_project_name(), self.event_context), self._pr_id, source_hash,
+            target_branch, self._pr_state, self._pr_status)
 
         OrchestratorBase.log().info(f"Updated scan tags for scans: {updated_scans}")
         return updated_scans
@@ -268,9 +278,8 @@ class OrchestratorBase:
     async def is_signature_valid(self, shared_secret : str) -> bool:
         raise NotImplementedError("is_signature_valid")
     
-    async def get_cxone_project_name(self) -> str:
+    async def get_default_cxone_project_name(self) -> str:
         raise NotImplementedError("get_cxone_project_name")
-
 
     @property
     def _pr_state(self) -> str:
