@@ -1,6 +1,6 @@
 from _version import __version__
 from _agent import __agent__
-from typing import Tuple, List, Union
+from typing import Tuple, List, Union, Dict, Any
 import os, logging, cxone_api as cx, yaml
 from multiprocessing import cpu_count
 from pathlib import Path
@@ -151,6 +151,22 @@ class CommonConfig:
         else:
             return config_dict[key]
 
+    @staticmethod
+    def _get_value_for_key_or_default_warn_deprecated(desired_key : str, deprecated_key : str, config_path : str, config_dict : Dict, default : Any) -> Any:
+
+        key = desired_key
+
+        if config_dict is None:
+            return default
+        elif deprecated_key is not None and deprecated_key in config_dict.keys():
+            CommonConfig.log().warning(f"{config_path}: {deprecated_key} is deprecated and may not function in the future.  Use {desired_key}.")
+            key = deprecated_key
+        elif desired_key is not None and desired_key in config_dict.keys():
+            return config_dict[key]
+        
+        return default
+    
+
 
     _default_amqp_url = "amqp://localhost:5672"
 
@@ -207,10 +223,11 @@ class CommonConfig:
                 __agent__, \
                 tenant_auth_endpoint, \
                 tenant_api_endpoint, \
-                CommonConfig._get_value_for_key_or_default('timeout-seconds', kwargs, 60), \
-                CommonConfig._get_value_for_key_or_default('retries', kwargs, 3), \
-                CommonConfig._get_value_for_key_or_default('proxies', kwargs, None), \
-                CommonConfig._get_value_for_key_or_default('ssl-verify', kwargs, CommonConfig.get_default_ssl_verify_value()) \
+                timeout=CommonConfig._get_value_for_key_or_default('timeout-seconds', kwargs, 60), \
+                retries=CommonConfig._get_value_for_key_or_default('retries', kwargs, 3), \
+                retry_delay_s=CommonConfig._get_value_for_key_or_default('retry-delay', kwargs, 30),
+                proxy=CommonConfig._get_value_for_key_or_default('proxies', kwargs, None), \
+                ssl_verify=CommonConfig._get_value_for_key_or_default('ssl-verify', kwargs, CommonConfig.get_default_ssl_verify_value()) \
                 )
         elif 'oauth' in kwargs.keys():
             oauth_params = CommonConfig._get_value_for_key_or_fail(config_path, 'oauth', kwargs)
@@ -222,10 +239,11 @@ class CommonConfig:
                 __agent__, \
                 tenant_auth_endpoint, \
                 tenant_api_endpoint, \
-                CommonConfig._get_value_for_key_or_default('timeout-seconds', kwargs, 60), \
-                CommonConfig._get_value_for_key_or_default('retries', kwargs, 3), \
-                CommonConfig._get_value_for_key_or_default('proxies', kwargs, None), \
-                CommonConfig._get_value_for_key_or_default('ssl-verify', kwargs, CommonConfig.get_default_ssl_verify_value()) \
+                timeout=CommonConfig._get_value_for_key_or_default('timeout-seconds', kwargs, 60), \
+                retries=CommonConfig._get_value_for_key_or_default('retries', kwargs, 3), \
+                retry_delay_s=CommonConfig._get_value_for_key_or_default('retry-delay', kwargs, 30),
+                proxy=CommonConfig._get_value_for_key_or_default('proxies', kwargs, None), \
+                ssl_verify=CommonConfig._get_value_for_key_or_default('ssl-verify', kwargs, CommonConfig.get_default_ssl_verify_value()) \
                 )
 
         return None

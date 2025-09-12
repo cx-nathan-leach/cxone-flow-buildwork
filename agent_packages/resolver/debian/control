@@ -1,4 +1,0 @@
-Package: cxoneflow-resolver-agent
-Maintainer: Checkmarx Professional Services
-Architecture: amd64
-Description: An agent for running SCA Resolver invoked by CxOneFlow.

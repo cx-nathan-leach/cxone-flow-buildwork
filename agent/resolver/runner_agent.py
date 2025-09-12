@@ -6,11 +6,13 @@ from workflows.messaging import (
     DelegatedScanResultMessage,
 )
 from workflows import ScanStates
-from scm_services.cloner import Cloner
+from scm_services import SCMService
+from cxone_service import CxOneService
+from orchestration import AbstractOrchestrator
 from typing import Tuple
 from .exceptions import ResolverAgentException
-import aio_pika, pickle, gzip, os, subprocess, tempfile
-from .resolver_runner import ResolverRunner, ExecutionContext
+import aio_pika, pickle, shutil, subprocess
+from .resolver_runner import ResolverRunner, ResolverExecutionContext
 from pathlib import Path
 from _version import __version__
 
@@ -21,13 +23,13 @@ class ResolverRunnerAgent(BaseWorkflowService):
         self,
         tag: str,
         public_key: bytearray,
-        runner: ResolverRunner,
+        resolver_runner: ResolverRunner,
         amqp_args: Tuple,
     ):
         super().__init__(*amqp_args)
         self.__tag = tag
         self.__public_key = public_key
-        self.__runner = runner
+        self.__resolver_runner = resolver_runner
 
     @property
     def tag(self) -> str:
@@ -41,7 +43,7 @@ class ResolverRunnerAgent(BaseWorkflowService):
         self,
         workflow: ResolverScanningWorkflow,
         scan_msg: DelegatedScanMessage,
-        exit_code: int = None,
+        resolver_exit_code: int = None,
         logs: bytearray = None,
     ) -> None:
         result_msg = DelegatedScanResultMessage.factory(
@@ -50,20 +52,18 @@ class ResolverRunnerAgent(BaseWorkflowService):
             workflow=scan_msg.workflow,
             details=scan_msg.details,
             details_signature=scan_msg.details_signature,
-            resolver_results=None,
-            container_results=None,
-            exit_code=exit_code,
+            resolver_exit_code=resolver_exit_code,
             logs=logs,
         )
 
-        await workflow.deliver_resolver_results(
+        await workflow.deliver_delegated_scan_outcome(
             await self.mq_client(),
             self.route_key,
             result_msg,
             ResolverScanService.EXCHANGE_RESOLVER_SCAN,
         )
 
-    def __msg_should_process(self, msg : DelegatedScanMessage, runner : ExecutionContext) -> bool:
+    def __msg_should_process(self, msg : DelegatedScanMessage, runner : ResolverExecutionContext) -> bool:
             if not runner.can_execute:
                 ResolverRunnerAgent.log().error(
                     "The runner instance indicates it can't run."
@@ -76,7 +76,7 @@ class ResolverRunnerAgent(BaseWorkflowService):
     async def __call__(self, msg: aio_pika.abc.AbstractIncomingMessage):
         scan_msg = await self._safe_deserialize_body(msg, DelegatedScanMessage)
         try:
-            async with await self.__runner.executor() as runner:
+            async with await self.__resolver_runner.executor() as runner:
 
                 ResolverRunnerAgent.log().debug("Message received")
 
@@ -94,76 +94,83 @@ class ResolverRunnerAgent(BaseWorkflowService):
                     await self.__send_failure_response(workflow, scan_msg)
                 else:
 
-                    # Unpickle the cloner and clone
-                    cloner = pickle.loads(scan_msg.details.pickled_cloner)
+                    # Unpickle the SCMService instance and clone
+                    scm_service = pickle.loads(scan_msg.details.pickled_scm_service)
+                    if not isinstance(scm_service, SCMService):
+                        raise ResolverAgentException.type_mismatch_exception(SCMService, type(scm_service))
+                    
+                    # Unpickle CxOneService
+                    cxone_service = pickle.loads(scan_msg.details.pickled_cxone_service)
+                    if not isinstance(cxone_service, CxOneService):
+                        raise ResolverAgentException.type_mismatch_exception(CxOneService, type(cxone_service))
 
-                    if not isinstance(cloner, Cloner):
-                        raise ResolverAgentException.cloner_type_exception(type(cloner))
-                    else:
-                        ResolverRunnerAgent.log().info(f"Starting SCA Resolver: Project: [{scan_msg.details.project_name}]" + 
-                                                       f" From: [{scan_msg.moniker}] Workflow: [{str(scan_msg.workflow)}]" + 
-                                                       f" Clone: [{scan_msg.details.clone_url}@{scan_msg.details.commit_hash}] CorId: [{scan_msg.correlation_id}]")
+                    project_config = await cxone_service.load_project_config_by_id(scan_msg.details.project_id)
 
-                        async with await cloner.clone(
-                            scan_msg.details.clone_url,
-                            scan_msg.details.event_context,
-                            False,
-                            runner.clone_path.rstrip("/") + "/",
-                            False,
-                        ) as clone_worker:
-                            cloned_repo_loc = await clone_worker.loc()
-                            await cloner.reset_head(
-                                cloned_repo_loc, scan_msg.details.commit_hash
-                            )
 
-                            resolver_exec_result = await runner.execute_resolver(scan_msg.details.project_name, scan_msg.details.file_filters)
+                    ResolverRunnerAgent.log().info(f"Agent processing: Project: [{project_config.name}]" + 
+                                                    f" From: [{scan_msg.moniker}] Workflow: [{str(scan_msg.workflow)}]" + 
+                                                    f" Clone: [{scan_msg.details.clone_url}@{scan_msg.details.commit_hash}] CorId: [{scan_msg.correlation_id}]")
 
-                            resolver_res_path = Path(runner.result_resolver_out_file_path)
-                            if resolver_res_path.exists() and resolver_res_path.is_file():
-                                with open(runner.result_resolver_out_file_path, "rt") as f:
-                                    sca_results = gzip.compress(bytes(f.read(), "UTF-8"))
-                            else:
-                                sca_results = None
+                    async with await scm_service.cloner.clone(
+                        scan_msg.details.clone_url,
+                        scan_msg.details.event_context,
+                        False,
+                        runner.clone_path.rstrip("/") + "/",
+                        False,
+                    ) as clone_worker:
+                        cloned_repo_loc = Path(await clone_worker.loc())
+                        await scm_service.cloner.reset_head(
+                            cloned_repo_loc, scan_msg.details.commit_hash
+                        )
 
-                            container_res_path = Path(runner.result_container_out_file_path)
-                            if container_res_path.exists() and container_res_path.is_file():
-                                with open(runner.result_container_out_file_path, "rt") as f:
-                                    container_results = gzip.compress(bytes(f.read(), "UTF-8"))
-                            else:
-                                container_results = None
+                        resolver_exec_result = await runner.execute_resolver(project_config.name, scan_msg.details.file_filters)
 
-                            resolver_run_logs = resolver_exec_result.stdout
-                            return_code = resolver_exec_result.returncode
+                        resolver_res_path = Path(runner.result_resolver_out_file_path)
+                        if resolver_res_path.exists() and resolver_res_path.is_file():
+                            shutil.copyfile(resolver_res_path, cloned_repo_loc / ".cxsca-results.json" )
 
-                            result_msg = DelegatedScanResultMessage.factory(
-                                moniker=scan_msg.moniker,
-                                state=ScanStates.DONE,
-                                workflow=scan_msg.workflow,
-                                details=scan_msg.details,
-                                details_signature=scan_msg.details_signature,
-                                resolver_results=sca_results,
-                                container_results=container_results,
-                                logs=resolver_run_logs,
-                                exit_code=return_code,
-                            )
+                        container_res_path = Path(runner.result_container_out_file_path)
+                        if container_res_path.exists() and container_res_path.is_file():
+                            shutil.copyfile(container_res_path, cloned_repo_loc / ".cxsca-container-results.json" )
 
-                            await workflow.deliver_resolver_results(
-                                await self.mq_client(),
-                                self.route_key,
-                                result_msg,
-                                ResolverScanService.EXCHANGE_RESOLVER_SCAN,
-                            )
+                        resolver_run_logs = resolver_exec_result.stdout
+                        return_code = resolver_exec_result.returncode
+
+
+                        # Scan the resulting repo.
+                        inspector, _ = await AbstractOrchestrator.exec_local_scan(
+                            cloned_repo_loc, cxone_service, 
+                            f"{scan_msg.details.clone_url}|{scan_msg.details.scan_branch}|{scan_msg.details.commit_hash}|CorId:{scan_msg.correlation_id}",
+                            scan_msg.details.scan_branch, project_config, scan_msg.details.scan_tags | {"resolver" : "success" if return_code == 0 else "failure"})
+
+                        result_msg = DelegatedScanResultMessage.factory(
+                            moniker=scan_msg.moniker,
+                            state=ScanStates.DONE if return_code == 0 else ScanStates.FAILURE,
+                            workflow=scan_msg.workflow,
+                            details=scan_msg.details,
+                            details_signature=scan_msg.details_signature,
+                            logs=resolver_run_logs,
+                            scan_id=inspector.scan_id,
+                            resolver_exit_code = return_code
+                        )
+
+                        await workflow.deliver_delegated_scan_outcome(
+                            await self.mq_client(),
+                            self.route_key,
+                            result_msg,
+                            ResolverScanService.EXCHANGE_RESOLVER_SCAN,
+                        )
         except subprocess.CalledProcessError as cpex:
-            ResolverRunnerAgent.log().error(f"SCA Resolver: Process failure for Project: [{scan_msg.details.project_name}] with CorId: [{scan_msg.correlation_id}]")
-            self.log().exception(cpex)
+            ResolverRunnerAgent.log().error(f"Resolver workflow failure for CorId: [{scan_msg.correlation_id}]")
+            ResolverRunnerAgent.log().exception(cpex)
             await self.__send_failure_response(
                 workflow, scan_msg, cpex.returncode, cpex.output
             )
             await msg.nack(requeue=False)
         except BaseException as ex:
-            self.log().exception(f"SCA Resolver: Unhandled exception for Project: [{scan_msg.details.project_name}] with CorId: [{scan_msg.correlation_id}]", ex)
+            ResolverRunnerAgent.log().exception(f"Resolver workflow failure for CorId: [{scan_msg.correlation_id}]", ex)
             await self.__send_failure_response(workflow, scan_msg)
             await msg.nack(requeue=False)
         else:
-            ResolverRunnerAgent.log().info(f"SCA Resolver: Success for Project: [{scan_msg.details.project_name}] with CorId: [{scan_msg.correlation_id}]")
+            ResolverRunnerAgent.log().info(f"Resolver workflow completed successfully for CorId: [{scan_msg.correlation_id}]")
             await msg.ack()

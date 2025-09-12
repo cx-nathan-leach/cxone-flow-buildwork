@@ -1,0 +1,4 @@
+Package: cxoneflow-scan-agent
+Maintainer: Checkmarx Professional Services
+Architecture: amd64
+Description: An agent for running Checkmarx scans invoked by CxOneFlow.

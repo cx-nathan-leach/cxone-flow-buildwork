@@ -1,0 +1,38 @@
+#!/bin/sh
+
+case $1 in
+  "configure")
+    if [ $# -le 2 ];
+    then
+      getent passwd cx-scan-agent > /dev/null
+      if [ $? -ne 0 ];
+      then
+        echo Creating 'cx-scan-agent' user/group
+        useradd -c "Checkmarx Scan Agent Service User" --shell /usr/sbin/nologin cx-scan-agent
+      fi
+
+      getent passwd cx-scan-agent-rt > /dev/null
+      if [ $? -ne 0 ];
+      then
+        echo Creating 'cx-scan-agent-rt' user
+        useradd --no-create-home -c "Checkmarx Scan Agent Runtime User" -g cx-scan-agent --home-dir /nonexistant --shell /usr/sbin/nologin cx-scan-agent-rt
+      fi
+
+      echo Creating default secrets directory '/var/secrets'
+      mkdir -p /var/secrets
+      chown cx-scan-agent:cx-scan-agent /var/secrets
+      chmod 500 /var/secrets
+
+      chown -R root:root /etc/cxoneflow-scan-agent
+      chown -R root:root /opt/cxoneflow-scan-agent
+    fi
+
+    echo Enabling 'cxoneflow-scan-agent.service' to start at system start.
+    systemctl enable /opt/cxoneflow-scan-agent/cxoneflow-scan-agent.service
+    [ -f /etc/cxoneflow-scan-agent/config.yaml ] && systemctl start cxoneflow-scan-agent || :
+    ;;
+
+  *)
+    ;;
+esac
+

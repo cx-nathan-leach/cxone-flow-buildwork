@@ -159,7 +159,11 @@ class CxOneService:
                 exec_update = True
                 project_json['name'] = dynamic_project_name
 
-            project_orig_groups = project_json['groups']
+
+            # 'groups' can be null due to a bug in the CxOne API response.  The OpenAPI spec
+            # indicates it should be a non-null list.  No groups assigned yields an empty list for some tenants,
+            # but null for others.
+            project_orig_groups = project_json['groups'] if project_json['groups'] is not None else []
             if self.__update_groups:
                 new_list = await self.__resolve_group_memberships(project_orig_groups, clone_url)
                 # Check if there is a new group assignment needed for the project
@@ -205,12 +209,15 @@ class CxOneService:
             return_engine_config = CxOneService.__minimum_engine_selection
         
         return return_engine_config
+
+    async def load_project_config_by_id(self, project_id : str) -> ProjectRepoConfig:
+        return await ProjectRepoConfig.from_project_id(self.__client, project_id)
     
     async def load_project_config(self, default_project_name : str, dynamic_project_name : str, clone_url : str) -> ProjectRepoConfig:
         return await ProjectRepoConfig.from_project_json(self.__client, 
             await self.__create_or_retrieve_project(default_project_name, dynamic_project_name, clone_url))
 
-    async def execute_scan(self, zip_path : str, project_config : ProjectRepoConfig, commit_branch : str, repo_url : str, scan_tags : dict ={}):
+    async def execute_scan(self, zip_path : str, project_config : ProjectRepoConfig, commit_branch : str, scan_tags : dict ={}):
         engine_config = await self.__get_engine_config_for_scan(project_config, commit_branch)
 
         return CxOneService.__get_json_or_fail(await ScanInvoker.scan_get_response(self.__client, 
