@@ -8,7 +8,7 @@ from scm_services import SCMService
 from cxone_service import CxOneService
 from scm_services.cloner import Cloner, CloneWorker, CloneAuthException
 from workflows.exceptions import WorkflowException
-from workflows.messaging import PRDetails
+from workflows.messaging import PRDetails, PushDetails
 from workflows import ScanWorkflow
 from api_utils.auth_factories import EventContext
 from enum import Enum
@@ -200,15 +200,16 @@ class AbstractOrchestrator:
                     # pylint: disable=E1205
                     AbstractOrchestrator.log().exception("Delegated scan workflow exception.", ex)
 
-            return await AbstractOrchestrator.exec_clone_scan(services.cxone, services.scm, clone_url, source_hash,
-                                            source_branch, project_config, scan_tags, self.event_context)
+            inspector, action = await AbstractOrchestrator.exec_clone_scan(services.cxone, services.scm, clone_url, source_hash,
+                                    source_branch, project_config, scan_tags, self.event_context)
+            
+            return inspector, action
         else:
             AbstractOrchestrator.log().info(f"{clone_url}:{source_hash}:{source_branch} is not related to any protected branch: {protected_branches}")
             return None, AbstractOrchestrator.ScanAction.SKIPPED
 
     async def _execute_delegated_push_scan_workflow(self, services : CxOneFlowServices, scan_id : str) -> Tuple[ScanInspector, ScanAction]:
         
-        # Placeholder for eventual delivery of a Sarif feed.
 
         AbstractOrchestrator.log().debug(f"_execute_delegated_push_scan_workflow")
         inspector =  await services.cxone.load_scan_inspector(scan_id)
@@ -216,6 +217,15 @@ class AbstractOrchestrator:
 
         if inspector.executing:
             status = AbstractOrchestrator.ScanAction.EXECUTING
+            source_branch, commit_hash = await self._get_source_branch_and_hash()
+            await services.push.start_sarif_feedback(inspector.project_id, inspector.scan_id,
+                                                        PushDetails.factory(clone_url=self._repo_clone_url(services.scm.cloner),
+                                                                            repo_project=self._repo_project_key,
+                                                                            repo_slug=self._repo_slug,
+                                                                            organization=self._repo_organization,
+                                                                            source_branch=source_branch,
+                                                                            event_context=self.event_context,
+                                                                            commit_hash=commit_hash))
         elif inspector.failed:
             status = AbstractOrchestrator.ScanAction.FAILED
 
@@ -238,7 +248,21 @@ class AbstractOrchestrator:
         if scan_tags is not None:
             submitted_scan_tags.update(scan_tags)
 
-        return await self.__orchestrate_scan(services, submitted_scan_tags, ScanWorkflow.PUSH)
+        inspector, action = await self.__orchestrate_scan(services, submitted_scan_tags, ScanWorkflow.PUSH)
+
+        if inspector is not None and action == AbstractOrchestrator.ScanAction.EXECUTING:
+            source_branch, commit_hash = await self._get_source_branch_and_hash()
+            clone_url = self._repo_clone_url(services.scm.cloner)
+            await services.push.start_sarif_feedback(inspector.project_id, inspector.scan_id,
+                                                        PushDetails.factory(clone_url=clone_url,
+                                                                            repo_project=self._repo_project_key,
+                                                                            repo_slug=self._repo_slug,
+                                                                            organization=self._repo_organization,
+                                                                            source_branch=source_branch,
+                                                                            event_context=self.event_context,
+                                                                            commit_hash=commit_hash))
+
+        return inspector, action
 
 
     async def __start_pr_workflow(self, services : CxOneFlowServices, inspector : ScanInspector):
@@ -279,7 +303,7 @@ class AbstractOrchestrator:
             submitted_scan_tags.update(scan_tags)
 
         inspector, scan_action = await self.__orchestrate_scan(services, submitted_scan_tags, ScanWorkflow.PR)
-        if inspector is not None and scan_action is AbstractOrchestrator.ScanAction.EXECUTING:
+        if inspector is not None and scan_action == AbstractOrchestrator.ScanAction.EXECUTING:
             await self.__start_pr_workflow(services, inspector)
         elif scan_action is AbstractOrchestrator.ScanAction.DELEGATED:
             AbstractOrchestrator.log().info(f"PR workflow delegated for PR {self._pr_id}.")

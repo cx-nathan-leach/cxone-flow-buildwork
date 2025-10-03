@@ -2,12 +2,11 @@ import urllib.parse, aio_pika, logging, asyncio, os
 from ssl import create_default_context, CERT_NONE
 from cxoneflow_logging import SecretRegistry
 from workflows.messaging.base_message import BaseMessage
+from workflows.messaging import ScanAwaitMessage
 from typing import Any
 
-class BaseWorkflowService:
 
-    ELEMENT_PREFIX = "cx:"
-    TOPIC_PREFIX = "cx."
+class AMQPClient:
 
     def __init__(self, amqp_url : str, amqp_user : str, amqp_password : str, ssl_verify : bool):
         self.__lock = asyncio.Lock()
@@ -31,12 +30,11 @@ class BaseWorkflowService:
     def use_ssl(self):
         return urllib.parse.urlparse(self.__amqp_url).scheme == "amqps"
 
-
     async def mq_client(self) -> aio_pika.abc.AbstractRobustConnection:
         async with self.__lock:
 
             if self.__client is None:
-                BaseWorkflowService.log().debug(f"Creating AMQP connection to: {self.__amqp_url}")
+                AMQPClient.log().debug(f"Creating AMQP connection to: {self.__amqp_url}")
                 ctx = None
 
                 if isinstance(self.__ssl_verify, bool):
@@ -57,11 +55,26 @@ class BaseWorkflowService:
                                                     ssl_context=ctx)
         return self.__client
 
+
+class CxOneFlowAbstractWorkflowService(AMQPClient):
+    ELEMENT_PREFIX = "cx:"
+    TOPIC_PREFIX = "cx."
+
+    EXCHANGE_SCAN_INPUT = f"{ELEMENT_PREFIX}Scan In"
+    EXCHANGE_SCAN_WAIT = f"{ELEMENT_PREFIX}Scan Await"
+    EXCHANGE_SCAN_POLLING = f"{ELEMENT_PREFIX}Scan Polling Delivery"
+
     async def _safe_deserialize_body(self, msg : aio_pika.abc.AbstractIncomingMessage, msg_class : BaseMessage) -> Any:
         try:
             ret_val = msg_class.from_binary(msg.body)
             return ret_val
         except BaseException as ex:
-            BaseWorkflowService.log().exception(ex)
+            CxOneFlowAbstractWorkflowService.log().exception(ex)
             await msg.nack(requeue=False)
             raise
+
+    async def handle_completed_scan(self, msg : ScanAwaitMessage) -> None:
+        raise NotImplementedError("handle_awaited_scan")
+    
+    async def handle_awaited_scan_error(self, msg : ScanAwaitMessage, error_msg : str) -> None:
+        raise NotImplementedError("handle_awaited_scan_error")    
