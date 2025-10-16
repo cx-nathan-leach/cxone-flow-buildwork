@@ -42,16 +42,6 @@ jobs:
         with:
           ref: refs/tags/${{ inputs.tag }}
 
-      - name: Update version.txt
-        run: |
-            echo __version__=\"${{ inputs.tag }}\" > _version.py
-
-      - name: Build and Push Docker Image
-        run: |
-          BRIEFTAG=${{ inputs.tag }}
-          docker build -f docker/Dockerfile -t $DOCKER_REPO:$BRIEFTAG .
-          [ ${{ inputs.prerelease }} = false ] && docker tag $DOCKER_REPO:$BRIEFTAG $DOCKER_REPO:latest || :
-          docker push --all-tags $DOCKER_REPO
   
   build-kickoff-whl:
     runs-on: ubuntu-latest
@@ -190,7 +180,7 @@ jobs:
         run: |
           echo "# CxOneFlow ${{ inputs.tag }}" > release.md
           echo "" >> release.md
-          python3 scripts/json2md.py manual/release_notes.json ${{ inputs.tag } >> release.md
+          python3 scripts/json2md.py manual/release_notes.json ${{ inputs.tag }} >> release.md
           echo "" >> release.md
           echo The CxOneFlow ${{ inputs.tag }} Server is available in a container: >> release.md
           echo '```' >> release.md
