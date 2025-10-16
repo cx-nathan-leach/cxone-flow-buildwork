@@ -115,9 +115,18 @@ jobs:
         uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b
         with:
           ref: refs/tags/${{ inputs.tag }}
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
+        with:
+          python-version: "3.12"
         
       - name: Edit manual's version stamp
         run: echo ${{ inputs.tag }} > manual/version.tex
+
+      - name: Generate Latex Release Notes
+        run: |
+          python3 scripts/json2tex.py manual/release_notes.json manual/release_notes-content.tex
+          cat manual/release_notes-content.tex
 
       - name: Build PDF Manual
         uses: xu-cheng/latex-action@f1ca82cbed861b3534e2997dd584944f55b884ed
