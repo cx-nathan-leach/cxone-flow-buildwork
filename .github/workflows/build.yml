@@ -182,9 +182,16 @@ jobs:
         with:
           name: whl-${{ github.run_number }}
 
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
+        with:
+          python-version: "3.12"
+
       - name: Make release text
         run: |
           echo "# CxOneFlow ${{ inputs.tag }}" > release.md
+          echo "" >> release.md
+          python3 scripts/json2md.py manual/release_notes.json ${{ inputs.tag } >> release.md
+          echo "" >> release.md
           echo The CxOneFlow ${{ inputs.tag }} Server is available in a container: >> release.md
           echo '```' >> release.md
           [ ${{ inputs.prerelease }} = false ] && echo "docker pull $DOCKER_REPO:latest" >> release.md || :
