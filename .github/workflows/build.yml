@@ -155,6 +155,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Fetch Code
+        uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b
+        with:
+          ref: ${{ inputs.tag }}
+
       - name: Make release text
         run: |
           echo "# CxOneFlow ${{ inputs.tag }}" > release.md
